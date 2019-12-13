@@ -1,0 +1,8 @@
+#!/bin/bash
+
+#------#
+# Ping #
+#------#
+
+
+echo "Hello, World!"
