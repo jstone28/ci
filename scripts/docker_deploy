@@ -1,0 +1,124 @@
+#!/bin/bash
+
+set -e
+
+#------------------#
+# Credential Setup #
+#------------------#
+
+git_setup
+docker_setup
+
+# Checkout the branch using the CI provided environment variables
+# Do this here and in deploy because deploy may not be called previously
+if [ -n "$BITBUCKET_BRANCH" ]; then
+  CURRENT_BRANCH_NAME="$BITBUCKET_BRANCH"
+elif [ -n "$CI_COMMIT_REF_NAME" ]; then
+  CURRENT_BRANCH_NAME="$CI_COMMIT_REF_NAME"
+elif [ -n "$TRAVIS_BRANCH" ]; then
+  CURRENT_BRANCH_NAME="$TRAVIS_BRANCH"
+fi
+echo "Checking out $CURRENT_BRANCH_NAME..."
+git checkout "$CURRENT_BRANCH_NAME"
+
+# Forcefully ensure that the local branch is exactly the same as the remote.
+git reset --hard origin/"$CURRENT_BRANCH_NAME"
+echo "$CURRENT_BRANCH_NAME checked out."
+
+#------------------#
+# Set Project Name #
+#------------------#
+
+if [ -n "$BITBUCKET_BRANCH" ]; then
+  CI_PROJECT="$BITBUCKET_REPO_OWNER"/"$BITBUCKET_REPO_SLUG"
+elif [ -n "$CI_COMMIT_REF_NAME" ]; then
+  CI_PROJECT="$CI_PROJECT_PATH"
+fi
+
+#----------------------------#
+# Tag and Deploy to Registry #
+#----------------------------#
+
+if [ -e "Dockerfile" ]; then
+  if [ -n "$ARGO_DOCKER_REGISTRY_URL" ]; then
+    REGISTRY_URI="${ARGO_DOCKER_REGISTRY_URL}/${CI_PROJECT}:"
+    echo "Building docker image registry: ${REGISTRY_URI}"
+
+    if [ "$CURRENT_BRANCH_NAME" = "master" ]; then
+      ARGO_NEW_VERSION=$(git describe --tags --abbrev=0)
+
+      if [ -n "$ARGO_DOCKER_BUILD_ARGS" ]; then
+        docker build -t "$REGISTRY_URI$ARGO_NEW_VERSION" -t "$REGISTRY_URI"latest "$ARGO_DOCKER_BUILD_ARGS" .
+      else
+        docker build -t "$REGISTRY_URI$ARGO_NEW_VERSION" -t "$REGISTRY_URI"latest .
+      fi
+
+      docker push "${REGISTRY_URI}${ARGO_NEW_VERSION}"
+      docker push "${REGISTRY_URI}latest"
+
+      echo -e "\033[32;1mSUCCESS: *****************************************************************************"
+      echo "SUCCESS: pushed the following tags:"
+      echo "SUCCESS:"
+      echo "SUCCESS: ${REGISTRY_URI}${ARGO_NEW_VERSION}"
+      echo "SUCCESS: ${REGISTRY_URI}latest"
+      echo "SUCCESS:"
+      echo -e "SUCCESS: *****************************************************************************\033[0m"
+    else
+      # if not master, build the current branch, tag with current hash, and push it to registry
+      ARGO_NEW_VERSION=$(git log -1 --format=%h)
+
+      if [ -n "$ARGO_DOCKER_BUILD_ARGS" ]; then
+        docker build -t "$REGISTRY_URI$ARGO_NEW_VERSION" "$ARGO_DOCKER_BUILD_ARGS" .
+      else
+        docker build -t "${REGISTRY_URI}${ARGO_NEW_VERSION}" .
+      fi
+      docker push "${REGISTRY_URI}${ARGO_NEW_VERSION}"
+      echo -e "\033[32;1mSUCCESS: *****************************************************************************"
+      echo "SUCCESS: pushed the following tag:"
+      echo "SUCCESS:"
+      echo "SUCCESS: ${REGISTRY_URI}${ARGO_NEW_VERSION}"
+      echo "SUCCESS:"
+      echo -e "SUCCESS: *****************************************************************************\033[0m"
+    fi
+  else
+    echo -e "\033[1;33mWARNING: ***********************************************************************************"
+    echo "WARNING: Unable to build a docker image. ARGO_DOCKER_REGISTRY_URL has not been set."
+    echo "WARNING: Documentation: https://gitlab.com/itentialopensource/argo#private-docker-registries-optional "
+    echo -e "WARNING: ***********************************************************************************\033[0m"
+  fi
+else
+  echo -e "\033[1;33mWARNING: ***********************************************************************************"
+  echo "WARNING: Dockerfile not found. Skipping docker build and push..."
+  echo "WARNING: Documentation: https://gitlab.com/itentialopensource/argo#private-docker-registries-optional "
+  echo -e "WARNING: ***********************************************************************************\033[0m"
+fi
+
+# only process registry removal if the project is in Gitlab as defined by the predefined environment variables
+if [ -n "$CI_COMMIT_REF_NAME" ]; then
+  # get the Gitlab REGISTRY_REPO_ID from the Gitlab API
+  REGISTRY_REPO_ID=$(curl --silent --header "PRIVATE-TOKEN: ${ARGO_REGISTRY_API_TOKEN}" "https://gitlab.com/api/v4/projects/${CI_PROJECT_ID}/registry/repositories" | jq .[].id)
+  # get the last 10 items (remove the first 5 results from current for recent builds)
+  arr=($(git log -16 --format=%h | sed '1,6d'))
+  # loop through ([15-5] -- the last 10 skipping the most recent 5) previous hashes
+  for PREVIOUS_HASH in "${arr[@]}"; do
+    # check for previously built hash
+    BUILD_EXISTS=$(curl --silent --header "PRIVATE-TOKEN: ${ARGO_REGISTRY_API_TOKEN}" "https://gitlab.com/api/v4/projects/${CI_PROJECT_ID}/registry/repositories/${REGISTRY_REPO_ID}/tags/${PREVIOUS_HASH}" | jq length)
+    # if any of the previous hashes has a length greater than 1, that means it can be deleted
+    if [ "$BUILD_EXISTS" -gt 1 ]; then
+      # delete it and get the status code
+      REGISTRY_DELETE=$(curl --silent --request DELETE --header "PRIVATE-TOKEN: ${ARGO_REGISTRY_API_TOKEN}" "https://gitlab.com/api/v4/projects/${CI_PROJECT_ID}/registry/repositories/${REGISTRY_REPO_ID}/tags/${PREVIOUS_HASH}" | jq)
+      # if the status code is 200, the image was removed cleanly
+      if [ "$REGISTRY_DELETE" = 200 ]; then
+        echo "${PREVIOUS_HASH} removed"
+      else
+        # if the status code wasn't 200, the image wasn't removed cleanly
+        echo -e "\033[1;33mWARNING: ***********************************************************************************"
+        echo "WARNING: Unable to delete the following hash:"
+        echo "WARNING:"
+        echo "WARNING: ${PREVIOUS_HASH}"
+        echo "WARNING:"
+        echo -e "WARNING: ***********************************************************************************\033[0m"
+      fi
+    fi
+  done
+fi

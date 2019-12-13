@@ -1,0 +1,329 @@
+#!/bin/bash
+set -e
+
+#----------------------#
+# Git Credential Setup #
+#----------------------#
+
+git_setup
+
+#-------------------------#
+# Checkout Current Branch #
+#-------------------------#
+
+# Checkout the branch that was merged into (master, release/x).
+if [ -n "$BITBUCKET_BRANCH" ]; then
+  CURRENT_BRANCH="$BITBUCKET_BRANCH"
+elif [ -n "$CI_COMMIT_REF_NAME" ]; then
+  CURRENT_BRANCH="$CI_COMMIT_REF_NAME"
+elif [ -n "$TRAVIS_BRANCH" ]; then
+  CURRENT_BRANCH="$TRAVIS_BRANCH"
+fi
+echo "Checking out $CURRENT_BRANCH..."
+git checkout "$CURRENT_BRANCH"
+# Forcefully ensure that the local branch is exactly the same as the remote.
+git reset --hard origin/"$CURRENT_BRANCH"
+echo "$CURRENT_BRANCH checked out."
+
+#-------------------#
+# Get Semver Prefix #
+#-------------------#
+
+# Get branch prefix for semver bump, otherwise default to patch.
+if [ -n "$BITBUCKET_BRANCH" ]; then
+  VERSION="$(git log --format=%s --merges -1|awk -F" " '{print $3}'|awk -F "/" '{print $1}'|tr -d '[:space:]')"
+elif [ -n "$CI_COMMIT_REF_NAME" ]; then
+  VERSION="$(git log --format=%s --merges -1|awk -F"'" '{print $2}'|awk -F "/" '{print $1}')"
+fi
+# Enable case globbing for matching "patch" and "Patch"
+shopt -s nocasematch
+case "$VERSION" in
+  # if PATCH transform to patch
+  patch|minor|major) SEMVER="$(echo "$VERSION" | awk '{print tolower($0)}')";;
+  *) SEMVER="patch";;
+esac
+# disable case matching
+shopt -s nocasematch
+if [ -z "$VERSION" ]; then
+  echo "No branch prefix detected. Defaulting to patch."
+fi
+echo "Semver bump: $SEMVER"
+
+#---------------------#
+# Get Current Version #
+#---------------------#
+
+if [ -e "package.json" ]; then
+  echo "This project is a node module."
+  CURRENT_VERSION=$(node -p "require('./package.json').version")
+elif [ -e "pom.xml" ]; then
+  echo "This project is a maven project."
+  CURRENT_VERSION="$(mvn org.apache.maven.plugins:maven-help-plugin:2.1.1:evaluate -Dexpression=project.version|grep -Ev '(^\[|Download\w+:)'|tr -d ' ' | tail -1)"
+  VERSION_FILE="pom.xml"
+elif [ -e "package-meta-data.xml" ]; then
+  echo "This project is an ncs package."
+  CURRENT_VERSION="$(grep "package-version" package-meta-data.xml|cut -d \> -f 2|cut -d \< -f 1|tr -d ' ')"
+  VERSION_FILE="package-meta-data.xml"
+elif [ -e "pyproject.toml" ]; then
+  echo "This project is a python package."
+  CURRENT_VERSION="$(grep "version" pyproject.toml|awk -F '"' '{print $2}')"
+  VERSION_FILE="pyproject.toml"
+elif [ -e "VERSION" ]; then
+  echo "This project has a VERSION file to track its version."
+  CURRENT_VERSION="$(cat VERSION)"
+  VERSION_FILE="VERSION"
+else
+  echo -e "\033[0;31mERROR: ***********************************************************************************"
+  echo "ERROR: No project versioning system detected. Unable to create and manage versions"
+  echo "ERROR: for this project."
+  echo -e "ERROR: ***********************************************************************************\033[0m"
+  exit 1
+fi
+echo "Last version: $CURRENT_VERSION"
+CURRENT_MAJOR=$(echo "$CURRENT_VERSION"|awk -F'.' '{print $1}')
+CURRENT_MINOR=$(echo "$CURRENT_VERSION"|awk -F'.' '{print $2}')
+if [[ $CURRENT_VERSION != *"+"* ]]; then
+  CURRENT_PATCH=$(echo "$CURRENT_VERSION"|awk -F'.' '{print $3}'|awk -F'-' '{print $1}')
+  CURRENT_PRERELEASE=$(echo "$CURRENT_VERSION"|awk -F'-' '{print $2}')
+else
+  CURRENT_PATCH=$(echo "$CURRENT_VERSION"|awk -F'.' '{print $3}'|awk -F'+' '{print $1}')
+  CURRENT_PRERELEASE=$(echo "$CURRENT_VERSION"|awk -F'+' '{print $2}')
+fi
+
+#--------------------#
+# Create New Version #
+#--------------------#
+
+# set version for packages that aren't node modules.
+if [ "$SEMVER" == "major" ]; then
+  if [[ $CURRENT_VERSION != *"-"* ]]; then
+    # no prerelease exists, so we'll bump the major.
+    MAJOR="$(bc <<< "$CURRENT_MAJOR"+1)"
+  else
+    # prerelease exists, let prerelease handle the version bump.
+    MAJOR="$CURRENT_MAJOR"
+  fi
+  MINOR="0"
+  PATCH="0"
+  PRERELEASE=""
+elif [ "$SEMVER" == "minor" ]; then
+  MAJOR="$CURRENT_MAJOR"
+  MINOR="$(bc <<< "$CURRENT_MINOR"+1)"
+  PATCH="0"
+  PRERELEASE=""
+elif [ "$SEMVER" == "patch" ]; then
+  if [[ $CURRENT_BRANCH == *"release"* ]]; then
+    if [ -z "$CURRENT_PRERELEASE" ]; then
+      MAJOR="$CURRENT_MAJOR"
+      MINOR="$CURRENT_MINOR"
+      PATCH="$CURRENT_PATCH"
+      PRERELEASE="-$(echo "$CURRENT_BRANCH"|awk -F'/' '{print $2".0"}')"
+    else
+      BUILD_PREFIX="$(echo "$CURRENT_PRERELEASE"|awk -F'.' '{print $1"."$2"."}')"
+      BUILD_PATCH="$(bc <<< "$(echo "$CURRENT_PRERELEASE"|awk -F'.' '{print $3}')"+1)"
+      MAJOR="$CURRENT_MAJOR"
+      MINOR="$CURRENT_MINOR"
+      PATCH="$CURRENT_PATCH"
+      PRERELEASE="-$BUILD_PREFIX$BUILD_PATCH"
+    fi
+  else
+    MAJOR="$CURRENT_MAJOR"
+    MINOR="$CURRENT_MINOR"
+    PATCH="$(bc <<< "$CURRENT_PATCH"+1)"
+  fi
+fi
+NEW_VERSION="$MAJOR.$MINOR.$PATCH$PRERELEASE"
+echo "New version: $NEW_VERSION"
+
+#------------------------#
+# Get JIRA Ticket Number #
+#------------------------#
+
+# we do this here so that we can pass it to create_release_note as well as the version-postback
+if [ -n "$ARGO_JIRA_URL" ]; then
+    # The first 2 awk's grab the ticket name in long form (PH-1234-example)
+    # The last awk cuts any extra information after the ticket number itself (PH-1234)
+    TICKET_NUM="$(
+      git log --format=%s --merges -1 |
+      awk -F"/" '{print $2}' |
+      awk -F "'" '{print $1}' |
+      awk 'match($0, /^[A-Z]{2,4}-[0-9]{1,6}/) { print substr($0, RSTART, RLENGTH) }'
+    )"
+fi
+
+#---------------------------#
+# Version & Release Package #
+#---------------------------#
+
+if [ -e "package.json" ]; then
+  # create release note before versioning the project
+  create_release_notes "$NEW_VERSION" "$TICKET_NUM"
+  # explicitly add the change log to the version bump commit
+  git add CHANGELOG.md
+  echo "Bumping version..."
+  # bump version, git tag, commit & then push changes
+  # using -f to ignore the added release note
+  if [[ $CURRENT_BRANCH == *"release"* ]]; then
+    if [[ "$SEMVER" == "patch" ]]; then
+      if [[ $CURRENT_VERSION != *"-"* ]]; then
+        PRERELEASE="-$(echo "$CURRENT_BRANCH"|awk -F'/' '{print $2".0"}')"
+        if [ -f yarn.lock ]; then
+          yarn version "$CURRENT_VERSION$PRERELEASE" -m "Updating release version to %s. [skip ci]"
+        else
+          npm version -f "$CURRENT_VERSION$PRERELEASE" -m "Updating release version to %s. [skip ci]" --loglevel=error
+        fi
+      else
+        if [ -f yarn.lock ]; then
+          yarn version prerelease -m "Updating release version to %s. [skip ci]"
+        else
+          npm version -f prerelease -m "Updating release version to %s. [skip ci]" --loglevel=error
+        fi
+      fi
+    else
+      echo -e "\033[0;31mERROR: ***********************************************************************************"
+      echo "ERROR: ONLY PATCHES ARE ALLOWED for release branch maintenance."
+      echo "ERROR: Re-evaluate your proposed change and make sure it is a patch, then resubmit"
+      echo "ERROR: a new merge request."
+      echo -e "ERROR: ***********************************************************************************\033[0m"
+      exit 1
+    fi
+  else
+    if [ -f yarn.lock ]; then
+      yarn version "$SEMVER" -m "Updating $SEMVER version to %s. [skip ci]"
+    else
+      npm version -f "$SEMVER" -m "Updating $SEMVER version to %s. [skip ci]" --loglevel=error
+    fi
+  fi
+  # no-verify is used to ignore any pre-push commits that may be used by the project
+  if git push origin "$CURRENT_BRANCH" --follow-tags --no-verify; then
+    echo "Version bumped and pushed."
+  else
+    echo -e "\033[0;31mERROR: ***********************************************************************************"
+    echo "ERROR: Failed to push."
+    echo -e "ERROR: ***********************************************************************************\033[0m"
+    exit 1
+  fi
+  # Publish the repo if a deploy runscript exists.
+  if [[ "$(node -p "typeof (require('./package.json').scripts.deploy) === 'string'")" == true ]]; then
+    echo "Running deploy runscript..."
+    if [ -f yarn.lock ]; then
+      if yarn run deploy; then
+        echo "Module has been published."
+      else
+        echo -e "\033[0;31mERROR: ***********************************************************************************"
+        echo "ERROR: Failed to deploy. Unable to run 'yarn run deploy'. Check the output above"
+        echo "ERROR: for more information."
+        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#available-commands "
+        echo -e "ERROR: ***********************************************************************************\033[0m"
+        exit 1
+      fi
+    else
+      if npm run deploy; then
+        echo "Module has been published."
+      else
+        echo -e "\033[0;31mERROR: ***********************************************************************************"
+        echo "ERROR: Failed to deploy. Unable to run 'npm run deploy'. Check the output above"
+        echo "ERROR: for more information."
+        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#available-commands"
+        echo -e "ERROR: ***********************************************************************************\033[0m"
+        exit 1
+      fi
+    fi
+  else
+    echo "INFO: **************************************************************************************"
+    echo "INFO: No 'deploy' runscript detected. This project will not be published to a registry."
+    echo "INFO: Documentation: https://gitlab.com/itentialopensource/argo#available-commands"
+    echo "INFO: **************************************************************************************"
+  fi
+else
+  # poetry? use poetry
+  if [ -e "pyproject.toml" ]; then
+    echo "Bumping version via poetry version..."
+    if [[ $CURRENT_BRANCH == *"release"* ]]; then
+      if [[ "$SEMVER" == "patch" ]]; then
+        if [[ $CURRENT_VERSION != *"+"* ]]; then
+          # no prior patch version. Will create YYYY.R.0
+          PRERELEASE="+$(echo "$CURRENT_BRANCH"|awk -F'/' '{print $2".0"}')"
+          poetry version "$CURRENT_VERSION$PRERELEASE"
+        else
+          # prior patch version determined by + existence above
+          # will increment the prerelease version YYYY.R.X+1
+          BUILD_PREFIX="$(echo "$CURRENT_PRERELEASE"|awk -F'.' '{print $1"."$2"."}')"
+          BUILD_PATCH="$(bc <<< "$(echo "$CURRENT_PRERELEASE"|awk -F'.' '{print $3}')"+1)"
+          PRERELEASE="+$BUILD_PREFIX$BUILD_PATCH"
+          poetry version "$CURRENT_MAJOR.$CURRENT_MINOR.$CURRENT_PATCH$PRERELEASE"
+        fi
+      else
+        echo -e "\033[0;31mERROR: ***********************************************************************************"
+        echo "ERROR: ONLY PATCHES ARE ALLOWED for release branch maintenance. Re-evaluate your proposed"
+        echo "ERROR: change and make sure it is a patch, then resubmit a new merge request."
+        echo -e "ERROR: ***********************************************************************************\033[0m"
+        exit 1
+      fi
+    else
+      poetry version "$NEW_VERSION"
+    fi
+  else
+    # for all other packages:
+    echo "Bumping version..."
+    sed -e "s/$CURRENT_VERSION/$NEW_VERSION/g" -i.bak "$VERSION_FILE"
+    rm -f "$VERSION_FILE".bak
+  fi
+  create_release_notes "$NEW_VERSION" "$TICKET_NUM"
+  # add the changed files to the commit
+  git add "$VERSION_FILE" CHANGELOG.md
+  echo "Tagging, committing, and pushing changes..."
+  git commit -m "Updating $SEMVER version to $NEW_VERSION. [skip ci]"
+  git tag -a v"$NEW_VERSION" -m "Updating $SEMVER version to $NEW_VERSION. [skip ci]"
+  if git push origin "$CURRENT_BRANCH" --follow-tags --no-verify; then
+    echo "Version bumped and pushed."
+  else
+    echo -e "\033[0;31mERROR: ***********************************************************************************"
+    echo "ERROR: Failed to push."
+    echo -e "ERROR: ***********************************************************************************\033[0m"
+    exit 1
+  fi
+  if [ -e "pyproject.toml" ]; then
+    # Publish the repo.
+    echo "Running deployment..."
+    if ! poetry run build; then
+      echo "This project does not have a build step, deploying module without any pyc compilation..."
+      if ! poetry build; then
+        echo -e "\033[0;31mERROR: ***********************************************************************************"
+        echo "ERROR: Failed to build."
+        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#available-commands"
+        echo -e "ERROR: ***********************************************************************************\033[0m"
+        exit 1
+      fi
+    fi
+    if [ -n "$ARGO_POETRY_REPOSITORY" ]; then
+      if poetry publish -r "$ARGO_POETRY_REPOSITORY"; then
+        echo "Module has been deployed."
+      else
+        echo -e "\033[0;31mERROR: ***********************************************************************************"
+        echo "ERROR: Failed to deploy. Make sure your environment variables are valid"
+        echo "ERROR: and a registry endpoint exists."
+        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#private-python-repositories-optional"
+        echo -e "ERROR: ***********************************************************************************\033[0m"
+        exit 1
+      fi
+    else
+      if poetry publish; then
+        echo "Module has been deployed."
+      else
+        echo -e "\033[0;31mERROR: ***********************************************************************************"
+        echo "ERROR: Failed to deploy. Make sure your environment variables are valid"
+        echo "ERROR: and a registry endpoint exists."
+        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#private-python-repositories-optional"
+        echo -e "ERROR: ***********************************************************************************\033[0m"
+        exit 1
+      fi
+    fi
+  fi
+fi
+
+#------------------------------#
+# Post Release Version to JIRA #
+#------------------------------#
+
+jira_version_post_back "$TICKET_NUM" "$NEW_VERSION"

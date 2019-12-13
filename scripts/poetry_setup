@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# source poetry
+. "$HOME"/.poetry/env
+
+# check poetry version
+echo "poetry version: $(poetry --version)"
+
+# Add poetry credentials to container
+poetry config repositories."$ARGO_POETRY_REPOSITORY" "$ARGO_POETRY_REGISTRY_URL"
+poetry config http-basic."$ARGO_POETRY_REPOSITORY" "$ARGO_POETRY_REGISTRY_USERNAME" "$ARGO_POETRY_REGISTRY_PASSWORD"
+
+if [ -f pyproject.toml ]; then
+  echo "Installing dependencies..."
+  if ! poetry install; then
+    exit 1
+  fi
+  echo "Dependencies installed."
+else
+  echo "No pyproject.toml in project. Moving on."
+fi

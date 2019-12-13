@@ -1,0 +1,240 @@
+#!/bin/bash
+set -e
+
+#----------------------#
+# Git Credential Setup #
+#----------------------#
+
+git_setup
+
+#-------------------------#
+# Checkout Current Branch #
+#-------------------------#
+
+# Checkout the branch that was merged in.
+if [ -n "$BITBUCKET_BRANCH" ]; then
+  CURRENT_BRANCH="$BITBUCKET_BRANCH"
+elif [ -n "$CI_COMMIT_REF_NAME" ]; then
+  CURRENT_BRANCH="$CI_COMMIT_REF_NAME"
+fi
+echo "Checking out $CURRENT_BRANCH..."
+git checkout "$CURRENT_BRANCH"
+# Forcefully ensure that the local branch is exactly the same as the remote.
+git reset --hard origin/"$CURRENT_BRANCH"
+echo "$CURRENT_BRANCH checked out."
+# THE END IS NIGH! Fail the pipeline if there are other major branches.
+if [ "$(git branch -r|grep major -c)" -gt 1 ]; then
+  echo -e "\033[0;31mERROR: ***********************************************************************************"
+  echo "ERROR: This project has more than 1 major branch, but only 1 major branch is allowed."
+  echo "ERROR: Remove any unused major branches and try again."
+  echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#available-commands "
+  echo -e "ERROR: ***********************************************************************************\033[0m"
+  exit 1
+fi
+
+#---------------------#
+# Get Current Version #
+#---------------------#
+
+if [ -e "package.json" ]; then
+  echo "This project is a node module."
+  CURRENT_VERSION=$(node -p -e "require('./package.json').version")
+elif [ -e "pom.xml" ]; then
+  echo "This project is a maven project."
+  CURRENT_VERSION="$(mvn org.apache.maven.plugins:maven-help-plugin:2.1.1:evaluate -Dexpression=project.version|grep -Ev '(^\[|Download\w+:)'|tr -d ' ' | tail -1)"
+  VERSION_FILE="pom.xml"
+elif [ -e "package-meta-data.xml" ]; then
+  echo "This project is an ncs package."
+  CURRENT_VERSION="$(grep "package-version" package-meta-data.xml|cut -d \> -f 2|cut -d \< -f 1|tr -d ' ')"
+  VERSION_FILE="package-meta-data.xml"
+elif [ -e "pyproject.toml" ]; then
+  echo "This project is a python package."
+  CURRENT_VERSION="$(grep "version" pyproject.toml|awk -F '"' '{print $2}')"
+  VERSION_FILE="pyproject.toml"
+elif [ -e "VERSION" ]; then
+  echo "This project has a VERSION file to track its version."
+  CURRENT_VERSION="$(cat VERSION)"
+  VERSION_FILE="VERSION"
+fi
+echo "Last version: $CURRENT_VERSION"
+
+#------------------------#
+# Get JIRA Ticket Number #
+#------------------------#
+
+# we do this here so that we can pass it to create_release_note as well as the version-postback
+if [ -n "$ARGO_JIRA_URL" ]; then
+  TICKET_NUM="$(git log --format=%s --merges -1|awk -F"/" '{print $2}'|awk -F "'" '{print $1}')"
+fi
+
+#---------------------------#
+# Version & Release Package #
+#---------------------------#
+
+if [ -e "package.json" ]; then
+  # create release note before versioning the project
+  create_release_notes "$NEW_VERSION" "$TICKET_NUM"
+  # explicitly add the change log to the version bump commit
+  git add CHANGELOG.md
+  echo "Bumping version..."
+  # bump version, git tag, commit & then push changes
+  # using -f to ignore the added release note
+  if [[ $CURRENT_VERSION = *"-"* ]]; then
+    # This project already has a prerelease version. Use prerelease
+    if [ -f yarn.lock ]; then
+      yarn version prerelease -m "Updating prerelease version to %s. [skip ci]"
+    else
+      npm version -f prerelease -m "Updating prerelease version to %s. [skip ci]" --loglevel=error
+    fi
+  else
+    # No prerelease has been created before. Use premajor to start prereleasing
+    if [ -f yarn.lock ]; then
+      yarn version premajor -m "Updating prerelease version to %s. [skip ci]"
+    else
+      npm version -f premajor -m "Updating prerelease version to %s. [skip ci]" --loglevel=error
+    fi
+  fi
+  # no-verify is used to ignore any pre-push commits that may be used by the project
+  if git push origin "$CURRENT_BRANCH" --no-verify && git push --tags --no-verify; then
+    echo "Version bumped and pushed."
+  else
+    echo -e "\033[0;31mERROR: ***********************************************************************************"
+    echo "ERROR: Failed to push."
+    echo -e "ERROR: ***********************************************************************************\033[0m"
+    exit 1
+  fi
+  # Publish the repo if a deploy runscript exists.
+  if [[ "$(node -p "typeof (require('./package.json').scripts.deploy) === 'string'")" == true ]]; then
+    echo "Running deploy runscript..."
+    if [ -f yarn.lock ]; then
+      if yarn run deploy; then
+        echo "Module has been published."
+      else
+        echo -e "\033[0;31mERROR: ***********************************************************************************"
+        echo "ERROR: Failed to deploy. Unable to run 'yarn run deploy'. Check the output above"
+        echo "ERROR: for more information."
+        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#available-commands"
+        echo -e "ERROR: ***********************************************************************************\033[0m"
+        exit 1
+      fi
+    else
+      if npm run deploy; then
+        echo "Module has been published."
+      else
+        echo -e "\033[0;31mERROR: ***********************************************************************************"
+        echo "ERROR: Failed to deploy. Unable to run 'npm run deploy'. Check the output above"
+        echo "ERROR: for more information."
+        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#available-commands"
+        echo -e "ERROR: ***********************************************************************************\033[0m"
+        exit 1
+      fi
+    fi
+  else
+    echo "INFO: **************************************************************************************"
+    echo "INFO: No 'deploy' runscript detected. This project will not be published to a registry."
+    echo "INFO: Documentation: https://gitlab.com/itentialopensource/argo#available-commands"
+    echo "INFO: **************************************************************************************"
+  fi
+# poetry? use poetry
+elif [ -e "pyproject.toml" ]; then
+  echo "Bumping version via poetry version..."
+  if [[ $CURRENT_VERSION = *"-"* ]]; then
+    # This project already has a prerelease version. Use prerelease
+    OLD_SEMVER="$(echo "$CURRENT_VERSION"|awk -F'-' '{print $1}')"
+    NEW_PRERELEASE_VERSION="$(bc <<< "$(echo "$CURRENT_VERSION"|awk -F'-' '{print $2}')"+1)"
+    NEW_VERSION="$OLD_SEMVER-$NEW_PRERELEASE_VERSION"
+    echo "New version: $NEW_VERSION"
+  else
+    # No prerelease has been created before. Use premajor to start prereleasing
+    NEW_MAJOR="$(bc <<< "$(echo "$CURRENT_VERSION"|awk -F'.' '{print $1}')"+1)"
+    NEW_VERSION="$NEW_MAJOR.0.0-0"
+    echo "New version: $NEW_VERSION"
+  fi
+  poetry version "$NEW_VERSION"
+  # add the changed files to the commit
+  git add "$VERSION_FILE" CHANGELOG.md
+  echo "Tagging, committing, and pushing changes..."
+  git commit -m "Updating prerelease version to $NEW_VERSION. [skip ci]"
+  git tag -a v"$NEW_VERSION" -m "Updating prerelease version to $NEW_VERSION. [skip ci]"
+  if git push origin "$CURRENT_BRANCH" --no-verify && git push --tags --no-verify; then
+    echo "Version bumped and pushed."
+  else
+    echo -e "\033[0;31mERROR: ***********************************************************************************"
+    echo "ERROR: Failed to push."
+    echo -e "ERROR: ***********************************************************************************\033[0m"
+    exit 1
+  fi
+  # Publish the repo.
+  echo "Running deployment..."
+  if ! poetry run build; then
+    echo "This project does not have a build step, deploying module without any pyc compilation..."
+    if ! poetry build; then
+      echo -e "\033[0;31mERROR: ***********************************************************************************"
+      echo "ERROR: Failed to build."
+      echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#available-commands"
+      echo -e "ERROR: ***********************************************************************************\033[0m"
+      exit 1
+    fi
+  fi
+  if [ -n "$ARGO_POETRY_REPOSITORY" ]; then
+    if poetry publish -r "$ARGO_POETRY_REPOSITORY"; then
+      echo "Module has been deployed."
+    else
+      echo -e "\033[0;31mERROR: ***********************************************************************************"
+      echo "ERROR: Failed to deploy. Make sure your environment variables are valid"
+      echo "ERROR: and a registry endpoint exists."
+      echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#private-python-repositories-optional"
+      echo -e "ERROR: ***********************************************************************************\033[0m"
+      exit 1
+    fi
+  else
+    if poetry publish; then
+      echo "Module has been deployed."
+    else
+      echo -e "\033[0;31mERROR: ***********************************************************************************"
+      echo "ERROR: Failed to deploy. Make sure your environment variables are valid"
+      echo "ERROR: and a registry endpoint exists."
+      echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#private-python-repositories-optional"
+      echo -e "ERROR: ***********************************************************************************\033[0m"
+      exit 1
+    fi
+  fi
+else
+  # for other package types:
+  # create release note
+  create_release_notes "$NEW_VERSION" "$TICKET_NUM"
+  if [[ $CURRENT_VERSION = *"-"* ]]; then
+    # This project already has a prerelease version. Use prerelease
+    OLD_SEMVER="$(echo "$CURRENT_VERSION"|awk -F'-' '{print $1}')"
+    NEW_PRERELEASE_VERSION="$(bc <<< "$(echo "$CURRENT_VERSION"|awk -F'-' '{print $2}')"+1)"
+    NEW_VERSION="$OLD_SEMVER-$NEW_PRERELEASE_VERSION"
+    echo "New version: $NEW_VERSION"
+  else
+    # No prerelease has been created before. Use premajor to start prereleasing
+    NEW_MAJOR="$(bc <<< "$(echo "$CURRENT_VERSION"|awk -F'.' '{print $1}')"+1)"
+    NEW_VERSION="$NEW_MAJOR.0.0-0"
+    echo "New version: $NEW_VERSION"
+  fi
+  echo "Bumping version..."
+  sed -e "s/$CURRENT_VERSION/$NEW_VERSION/g" -i.bak "$VERSION_FILE"
+  rm -f "$VERSION_FILE".bak
+  # add the changed files to the commit
+  git add "$VERSION_FILE" CHANGELOG.md
+  echo "Tagging, committing, and pushing changes..."
+  git commit -m "Updating prerelease version to $NEW_VERSION. [skip ci]"
+  git tag -a v"$NEW_VERSION" -m "Updating prerelease version to $NEW_VERSION. [skip ci]"
+  if git push origin "$CURRENT_BRANCH" --no-verify && git push --tags --no-verify; then
+    echo "Version bumped and pushed."
+  else
+    echo -e "\033[0;31mERROR: ***********************************************************************************"
+    echo "ERROR: Failed to push."
+    echo -e "ERROR: ***********************************************************************************\033[0m"
+    exit 1
+  fi
+fi
+
+#------------------------------#
+# Post Release Version to JIRA #
+#------------------------------#
+
+jira_version_post_back "$TICKET_NUM"

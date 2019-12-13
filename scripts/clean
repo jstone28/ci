@@ -1,0 +1,6 @@
+#!/bin/bash
+
+echo -e "Cleaning up docker images...\\n"
+# -a removes mongo and redis
+docker system prune -f --volumes
+echo -e "Docker image clean up completed.\\n"

@@ -1,0 +1,21 @@
+image: jstone28/ci
+
+variables:
+  DOCKER_DRIVER: overlay2
+
+services:
+  - docker:dind
+
+after_script:
+  - rm -rf ~/.ssh
+
+stages:
+  - deploy
+
+deploy:
+  stage: deploy
+  script:
+     - echo "docker_setup"
+    # - docker_setup
+    # - docker build -t jstone28/ci:latest .
+    # - docker push jstone28/ci:latest

@@ -1,0 +1,154 @@
+#!/bin/bash
+
+set -e
+
+#----------------------#
+# Git Credential Setup #
+#----------------------#
+
+git_setup
+
+#-----------------------------#
+# Kubernetes Credential Setup #
+#-----------------------------#
+
+kubernetes_setup
+
+#---------------------------#
+# Install Spar YAML linting #
+#---------------------------#
+
+# spar ci (automated) to validate yaml
+npm i -g @itentialopensource/spar --unsafe-perm
+spar ci
+
+# get the CURRENT_BRANCH from the env
+if [ -n "$BITBUCKET_BRANCH" ]; then
+  CURRENT_BRANCH="$BITBUCKET_BRANCH"
+elif [ -n "$CI_COMMIT_REF_NAME" ]; then
+  CURRENT_BRANCH="$CI_COMMIT_REF_NAME"
+elif [ -n "$TRAVIS_BRANCH" ]; then
+  CURRENT_BRANCH="$TRAVIS_BRANCH"
+fi
+
+# convert all [._/] in branch name to - for kubernetes
+K8S_BRANCH_NAME=$(echo "$CURRENT_BRANCH" | sed -E 's/[._/]+/-/g' | tr "[:upper:]" "[:lower:]")
+# convert all [._/] in app name to - for kubernetes
+SELECTOR_APP_NAME=$(echo "${CI_PROJECT_NAME//./-}" | sed -E 's/[._/]+/-/g' | tr "[:upper:]" "[:lower:]")
+
+#---------------------------#
+# App Name K8s Cofiguration #
+#---------------------------#
+
+# if the current branch is master
+if [ "$CURRENT_BRANCH" = "master" ]; then
+  # get the new version from the most recent tag (to be used later)
+  ARGO_NEW_VERSION=$(git describe --tags --abbrev=0)
+
+  # Only the application name is used the service in master
+  APPLICATION_NAME="$SELECTOR_APP_NAME"
+
+  # replace the the nameSuffix field to be a blank
+  sed -i '/nameSuffix: /c\nameSuffix: \"\"' manifests/kustomization.yml
+
+  # set the label selector with app name from the env
+  sed -i "/  app: /c\\  app: ${SELECTOR_APP_NAME}" manifests/kustomization.yml
+
+  # comment back in anything that was commented (pattern: # - )
+  sed -i -E "s/^# - /- /" manifests/kustomization.yml
+else
+  # get the new version from the most recent hash on a non-master branch
+  ARGO_NEW_VERSION=$(git log -1 --format=%h)
+
+  # get the service name (branch appended for non-master) for service-up watch
+  APPLICATION_NAME="${SELECTOR_APP_NAME}-${K8S_BRANCH_NAME}"
+
+  # replace the nameSuffix field with the branch name
+  sed -i "/nameSuffix: /c\\nameSuffix: \"-${K8S_BRANCH_NAME}\"" manifests/kustomization.yml
+
+  # set the label selector with branch name (note the spacing)
+  sed -i "/  app: /c\\  app: ${K8S_BRANCH_NAME}" manifests/kustomization.yml
+
+  # comment out ingress and/or mcrt in the staging environment
+  sed -i -E "s/^- (i|m)/# &/" manifests/kustomization.yml
+fi
+
+#----------------------#
+# Semver/Hash Updating #
+#----------------------#
+
+# append ARGO_NEW_VERSION [defined in the previous section] to newTag in the kustomization.yml
+sed -i "/  newTag: /c\\  newTag: \"${ARGO_NEW_VERSION}\"" manifests/kustomization.yml
+
+#----------------------------#
+# Commit Updated Semver/Hash #
+#----------------------------#
+
+git add ./manifests/*.yml
+echo "Updating deployment manifest with new hash and pushing changes..."
+git commit -m "Updating ${CURRENT_VERSION} version to ${ARGO_NEW_VERSION}. [skip ci]"
+if git push origin "$CURRENT_BRANCH" --no-verify; then
+  echo "Version bumped and pushed."
+else
+  echo -e "\033[0;31mERROR: ***********************************************************************************"
+  echo "ERROR: Failed to push."
+  echo -e "ERROR: ***********************************************************************************\033[0m"
+  exit 1
+fi
+
+#--------------------------------#
+# Deploy to Predefined Namespace #
+#--------------------------------#
+
+  # if the current branch is master
+if [ "$CURRENT_BRANCH" = "master" ]; then
+  # if there's no namespace set, we default to the immutable default within the cluster
+  if [ -n "$ARGO_PRODUCTION_NAMESPACE" ]; then
+    ARGO_PRODUCTION_NAMESPACE="default"
+  fi
+  # apply the kustomization file but commenting any non-deployment or service file
+  kubectl apply -k ./manifests --namespace="$ARGO_PRODUCTION_NAMESPACE"
+else
+  # if there's no namespace set, we default to the immutable default within the cluster
+  if [ -n "$ARGO_STAGING_NAMESPACE" ]; then
+    ARGO_STAGING_NAMESPACE="default"
+  fi
+  # apply the kustomization file but commenting any non-deployment or service file
+  kubectl apply -k ./manifests --namespace="$ARGO_STAGING_NAMESPACE"
+fi
+
+# if K8S_DEPLOY_TIMEOUT is not set, set it else use exist
+if [ -z "$ARGO_K8S_DEPLOY_TIMEOUT" ]; then
+  echo "INFO: **************************************************************************************"
+  echo "INFO: No Kubernetes deploy timeout specified. Defaulting to 30 minutes."
+  echo "INFO: Documentation: https://gitlab.com/itentialopensource/argo#kubernetes-deployment-optional"
+  echo "INFO: **************************************************************************************"
+  ARGO_K8S_DEPLOY_TIMEOUT=1800
+fi
+
+#--------------------------#
+# Wait for IP from Cluster #
+#--------------------------#
+
+# set timeout
+TIMEOUT=$(( "$SECONDS"+"$ARGO_K8S_DEPLOY_TIMEOUT" ))
+
+# if the LoadBalancer doesn't exist for this app (i.e.NodePort) skip the IP look up
+if [ "$(kubectl get service "${APPLICATION_NAME}" -o json | jq .status.loadBalancer)" != {} ]; then
+  # wait for application to come up and output service external-ip
+  while ! kubectl get service "${APPLICATION_NAME}" -o json | jq .status.loadBalancer.ingress[].ip 2> /dev/null && [ "$SECONDS" -lt "$TIMEOUT" ]; do
+    echo "Waiting for Kubernetes Service to establish an External-IP..."
+    sleep 15
+  done
+
+  # error if timeout
+  if [[ "$SECONDS" -ge "$TIMEOUT" ]]; then
+    echo -e "\033[0;31mERROR: ***********************************************************************************"
+    echo -e "ERROR: TIMEOUT ERROR. Use the following command to check the status of the deployment:"
+    echo -e "ERROR:"
+    echo -e "ERROR: \033[0mkubectl get service ${APPLICATION_NAME}\033[0;31m"
+    echo -e "ERROR:"
+    echo -e "ERROR: ***********************************************************************************\033[0m"
+    exit 1
+  fi
+fi

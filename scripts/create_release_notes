@@ -1,0 +1,67 @@
+#!/bin/bash
+
+#---------------------#
+# Create release note #
+#---------------------#
+
+NEW_VERSION=$1
+TICKET_NUM=$2
+
+create_release_note() {
+  # Create a changelog file if there isn't one
+  if [ ! -e CHANGELOG.md ]; then
+    touch CHANGELOG.md
+  fi
+  echo "Creating release note..."
+
+  #----------------#
+  # Changelog Body #
+  #----------------#
+
+  if [[ "$TICKET_NUM" =~ ^[A-Z]{2,4}-[0-9]{1,6}$ ]]; then
+    TICKET_LINK="[${TICKET_NUM}]($ARGO_JIRA_URL/browse/${TICKET_NUM})"
+    # curl jira api for release note via the release note field
+    CHANGELOG_CONTENT="$(
+      curl -sS \
+      -H "Authorization: Basic $ARGO_JIRA_AUTH_KEY" \
+      -H "Content-Type: application/json" \
+      -L "$ARGO_JIRA_URL"/rest/api/3/issue/"${TICKET_NUM}"?fields="$ARGO_JIRA_RELEASE_NOTE_FIELD" \
+      | awk -F"\"text\":\"" '{ print $2 }' | awk -F"\"}]" '{ print $1 }')"
+    # if the release note string is empty or no field exists, swap for generic note
+    if [[ -z "${CHANGELOG_CONTENT// }" || -z "$ARGO_JIRA_RELEASE_NOTE_FIELD" || "$CHANGELOG_CONTENT" == *"Unauthorized (401)"* ]]; then
+      echo -e "\033[1;33mWARNING: ***********************************************************************************"
+      echo "WARNING: Unable to fetch release notes from jira ticket \"$TICKET_NUM\"."
+      echo "WARNING: This version's changelog will contain a generic entry."
+      echo -e "WARNING: ***********************************************************************************\033[0m"
+      CHANGELOG_BODY="Bug fixes and performance improvements\\n\\nSee ticket $TICKET_LINK"
+    else
+      CHANGELOG_BODY="$CHANGELOG_CONTENT\\n\\nSee ticket $TICKET_LINK"
+    fi
+  else
+    # Get the merge request info
+    CHANGELOG_BODY="$(git log --merges -1 --format=%b)"
+    if [ -z "$CHANGELOG_BODY" ]; then
+      CHANGELOG_BODY="$(git log -1 --format='Bug fixes and performance improvements'%n%n'See commit '%h)"
+    fi
+  fi
+
+  #--------------------#
+  # Write Release Note #
+  #--------------------#
+
+  # get the current date
+  DATE=$(date +%m-%d-%Y)
+  # create the release note
+  RELEASE_NOTE="\\n## $NEW_VERSION [$DATE]\\n\\n* $CHANGELOG_BODY\\n\\n---\\n"
+  # append Release Note to Top of CHANGELOG
+  if ! echo -e "$RELEASE_NOTE$(cat CHANGELOG.md)" > CHANGELOG.md; then
+    echo -e "\033[0;31mERROR: ***********************************************************************************"
+    echo "ERROR: Unable to append release note information to changelog."
+    echo -e "ERROR: ***********************************************************************************\033[0m"
+  else
+    echo "Created release note:"
+    echo "$RELEASE_NOTE"
+  fi
+}
+
+create_release_note "$NEW_VERSION" "$TICKET_NUM"

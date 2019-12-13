@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# lint jira release notes content
+if [ -n "$ARGO_JIRA_URL" ]; then
+    # The first 2 awk's grab the ticket name in long form (PH-1234-example)
+    # The last awk cuts any extra information after the ticket number itself (PH-1234)
+    TICKET_NUM="$(
+      git log --format=%s --merges -1 |
+      awk -F"/" '{print $2}' |
+      awk -F "'" '{print $1}' |
+      awk 'match($0, /^[A-Z]{2,4}-[0-9]{1,6}/) { print substr($0, RSTART, RLENGTH) }'
+    )"
+fi
+
+if [[ "$TICKET_NUM" =~ ^[A-Z]{2,4}-[0-9]{1,6}$ ]]; then
+  TICKET_LINK="[${TICKET_NUM}]($ARGO_JIRA_URL/browse/${TICKET_NUM})"
+  # curl jira api for release note via the release note field
+  CHANGELOG_CONTENT="$(
+    curl -sS \
+    -H "Authorization: Basic $ARGO_JIRA_AUTH_KEY" \
+    -H "Content-Type: application/json" \
+    -L "$ARGO_JIRA_URL"/rest/api/3/issue/"${TICKET_NUM}"?fields="$ARGO_JIRA_RELEASE_NOTE_FIELD" \
+    | awk -F"\"text\":\"" '{ print $2 }' | awk -F"\"}]" '{ print $1 }')"
+  # if the release note string is empty or no field exists, fail
+  if [[ -z "${CHANGELOG_CONTENT// }" || -z "$ARGO_JIRA_RELEASE_NOTE_FIELD" || "$CHANGELOG_CONTENT" == *"Unauthorized (401)"* ]]; then
+    echo -e "\033[0;31mERROR: ***********************************************************************************"
+    echo "ERROR: Unable to find release notes in jira ticket \"$TICKET_NUM\"."
+    echo -e "ERROR: ***********************************************************************************\033[0m"
+    exit 1
+  else
+    # Lint the changelog
+    CHANGELOG_BODY="$CHANGELOG_CONTENT\\n\\nSee ticket $TICKET_LINK"
+    DATE=$(date +%m-%d-%Y)
+    # create the release note
+    RELEASE_NOTE="\\n## 1.2.3 [$DATE]\\n\\n* $CHANGELOG_BODY\\n\\n---\\n"
+    echo -e "$RELEASE_NOTE" > changelog.tmp
+    echo "linting changelog text..."
+    markdownlint -c /config/.markdownlint.json changelog.tmp
+    RES=$?
+    rm -rf changelog.tmp
+    if [ "$RES" -eq "1" ]; then
+      echo -e "\033[0;31mERROR: ***********************************************************************************"
+      echo "ERROR: Invalid changelog text."
+      echo -e "ERROR: ***********************************************************************************\033[0m"
+      exit 1
+    fi
+    echo "changelog text linted successfully."
+  fi
+else
+  echo "no jira ticket number, skipping release note linting."
+fi

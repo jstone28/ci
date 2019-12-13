@@ -1,0 +1,44 @@
+#!/bin/bash
+
+set -e
+
+echo "Attempting to authenticate with kubernetes provider"
+
+# get CURRENT_BRANCH from env use if's for different branches
+if [ -n "$BITBUCKET_BRANCH" ]; then
+  CURRENT_BRANCH="$BITBUCKET_BRANCH"
+elif [ -n "$CI_COMMIT_REF_NAME" ]; then
+  CURRENT_BRANCH="$CI_COMMIT_REF_NAME"
+elif [ -n "$TRAVIS_BRANCH" ]; then
+  CURRENT_BRANCH="$TRAVIS_BRANCH"
+fi
+
+if [ -n "$ARGO_GCLOUD_PROJECT_NAME" ]; then
+  # write the auth file to current context as json
+  echo "${ARGO_GCLOUD_PROJECT_KEY_FILE}" > ./"${ARGO_GCLOUD_PROJECT_NAME}".json
+  # authenticate using the keyfile created in the current context
+  gcloud auth activate-service-account --key-file=./"${ARGO_GCLOUD_PROJECT_NAME}".json
+
+  # authenticate kubectl with STAGING credentials
+  echo "Authenticating gcloud with STAGING cluster"
+  gcloud container clusters get-credentials "$ARGO_GCLOUD_STAGING_CLUSTER_NAME" --zone "$ARGO_GCLOUD_STAGING_CLUSTER_ZONE" --project "$ARGO_GCLOUD_PROJECT_NAME"
+
+  # if current branch is master
+  if [ "$CURRENT_BRANCH" = "master" ]; then
+    # remove the old build from cluster before removing the name to save space
+    # we auth, remove, reauth to make sure we remove from the STAGING cluster
+    # only remove the deployment so as to not disturb any other services.
+    echo "Removing STAGING build from STAGING cluster"
+    kubectl delete -k ./manifests || true
+    # authenticate kubectl with PROD credentials
+    echo "RE-authenticating gcloud with PRODUCTION cluster"
+    gcloud container clusters get-credentials "$ARGO_GCLOUD_PROD_CLUSTER_NAME" --zone "$ARGO_GCLOUD_PROD_CLUSTER_ZONE" --project "$ARGO_GCLOUD_PROJECT_NAME"
+  fi
+else
+  # if no crednetials have been set, notify user of the inability to deploy
+  echo -e "\033[0;31mERROR: ***********************************************************************************"
+  echo "ERROR: ARGO_GCLOUD_PROJECT_NAME has not been configured. Unable to deploy this project to kubernetes."
+  echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#kubernetes-deployment-optional"
+  echo -e "ERROR: ***********************************************************************************\033[0m"
+  exit 1
+fi
