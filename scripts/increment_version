@@ -140,7 +140,7 @@ echo "New version: $NEW_VERSION"
 #------------------------#
 
 # we do this here so that we can pass it to create_release_note as well as the version-postback
-if [ -n "$ARGO_JIRA_URL" ]; then
+if [ -n "$CI_JIRA_URL" ]; then
     # The first 2 awk's grab the ticket name in long form (PH-1234-example)
     # The last awk cuts any extra information after the ticket number itself (PH-1234)
     TICKET_NUM="$(
@@ -213,7 +213,6 @@ if [ -e "package.json" ]; then
         echo -e "\033[0;31mERROR: ***********************************************************************************"
         echo "ERROR: Failed to deploy. Unable to run 'yarn run deploy'. Check the output above"
         echo "ERROR: for more information."
-        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#available-commands "
         echo -e "ERROR: ***********************************************************************************\033[0m"
         exit 1
       fi
@@ -224,7 +223,6 @@ if [ -e "package.json" ]; then
         echo -e "\033[0;31mERROR: ***********************************************************************************"
         echo "ERROR: Failed to deploy. Unable to run 'npm run deploy'. Check the output above"
         echo "ERROR: for more information."
-        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#available-commands"
         echo -e "ERROR: ***********************************************************************************\033[0m"
         exit 1
       fi
@@ -232,7 +230,6 @@ if [ -e "package.json" ]; then
   else
     echo "INFO: **************************************************************************************"
     echo "INFO: No 'deploy' runscript detected. This project will not be published to a registry."
-    echo "INFO: Documentation: https://gitlab.com/itentialopensource/argo#available-commands"
     echo "INFO: **************************************************************************************"
   fi
 else
@@ -291,19 +288,17 @@ else
       if ! poetry build; then
         echo -e "\033[0;31mERROR: ***********************************************************************************"
         echo "ERROR: Failed to build."
-        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#available-commands"
         echo -e "ERROR: ***********************************************************************************\033[0m"
         exit 1
       fi
     fi
-    if [ -n "$ARGO_POETRY_REPOSITORY" ]; then
-      if poetry publish -r "$ARGO_POETRY_REPOSITORY"; then
+    if [ -n "$CI_POETRY_REPOSITORY" ]; then
+      if poetry publish -r "$CI_POETRY_REPOSITORY"; then
         echo "Module has been deployed."
       else
         echo -e "\033[0;31mERROR: ***********************************************************************************"
         echo "ERROR: Failed to deploy. Make sure your environment variables are valid"
         echo "ERROR: and a registry endpoint exists."
-        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#private-python-repositories-optional"
         echo -e "ERROR: ***********************************************************************************\033[0m"
         exit 1
       fi
@@ -314,7 +309,6 @@ else
         echo -e "\033[0;31mERROR: ***********************************************************************************"
         echo "ERROR: Failed to deploy. Make sure your environment variables are valid"
         echo "ERROR: and a registry endpoint exists."
-        echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#private-python-repositories-optional"
         echo -e "ERROR: ***********************************************************************************\033[0m"
         exit 1
       fi

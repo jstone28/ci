@@ -19,7 +19,6 @@ kubernetes_setup
 #---------------------------#
 
 # spar ci (automated) to validate yaml
-npm i -g @itentialopensource/spar --unsafe-perm
 spar ci
 
 # get the CURRENT_BRANCH from the env
@@ -43,7 +42,7 @@ SELECTOR_APP_NAME=$(echo "${CI_PROJECT_NAME//./-}" | sed -E 's/[._/]+/-/g' | tr 
 # if the current branch is master
 if [ "$CURRENT_BRANCH" = "master" ]; then
   # get the new version from the most recent tag (to be used later)
-  ARGO_NEW_VERSION=$(git describe --tags --abbrev=0)
+  CI_NEW_VERSION=$(git describe --tags --abbrev=0)
 
   # Only the application name is used the service in master
   APPLICATION_NAME="$SELECTOR_APP_NAME"
@@ -58,7 +57,7 @@ if [ "$CURRENT_BRANCH" = "master" ]; then
   sed -i -E "s/^# - /- /" manifests/kustomization.yml
 else
   # get the new version from the most recent hash on a non-master branch
-  ARGO_NEW_VERSION=$(git log -1 --format=%h)
+  CI_NEW_VERSION=$(git log -1 --format=%h)
 
   # get the service name (branch appended for non-master) for service-up watch
   APPLICATION_NAME="${SELECTOR_APP_NAME}-${K8S_BRANCH_NAME}"
@@ -77,8 +76,8 @@ fi
 # Semver/Hash Updating #
 #----------------------#
 
-# append ARGO_NEW_VERSION [defined in the previous section] to newTag in the kustomization.yml
-sed -i "/  newTag: /c\\  newTag: \"${ARGO_NEW_VERSION}\"" manifests/kustomization.yml
+# append CI_NEW_VERSION [defined in the previous section] to newTag in the kustomization.yml
+sed -i "/  newTag: /c\\  newTag: \"${CI_NEW_VERSION}\"" manifests/kustomization.yml
 
 #----------------------------#
 # Commit Updated Semver/Hash #
@@ -86,7 +85,7 @@ sed -i "/  newTag: /c\\  newTag: \"${ARGO_NEW_VERSION}\"" manifests/kustomizatio
 
 git add ./manifests/*.yml
 echo "Updating deployment manifest with new hash and pushing changes..."
-git commit -m "Updating ${CURRENT_VERSION} version to ${ARGO_NEW_VERSION}. [skip ci]"
+git commit -m "Updating ${CURRENT_VERSION} version to ${CI_NEW_VERSION}. [skip ci]"
 if git push origin "$CURRENT_BRANCH" --no-verify; then
   echo "Version bumped and pushed."
 else
@@ -103,27 +102,26 @@ fi
   # if the current branch is master
 if [ "$CURRENT_BRANCH" = "master" ]; then
   # if there's no namespace set, we default to the immutable default within the cluster
-  if [ -n "$ARGO_PRODUCTION_NAMESPACE" ]; then
-    ARGO_PRODUCTION_NAMESPACE="default"
+  if [ -n "$CI_PRODUCTION_NAMESPACE" ]; then
+    CI_PRODUCTION_NAMESPACE="default"
   fi
   # apply the kustomization file but commenting any non-deployment or service file
-  kubectl apply -k ./manifests --namespace="$ARGO_PRODUCTION_NAMESPACE"
+  kubectl apply -k ./manifests --namespace="$CI_PRODUCTION_NAMESPACE"
 else
   # if there's no namespace set, we default to the immutable default within the cluster
-  if [ -n "$ARGO_STAGING_NAMESPACE" ]; then
-    ARGO_STAGING_NAMESPACE="default"
+  if [ -n "$CI_STAGING_NAMESPACE" ]; then
+    CI_STAGING_NAMESPACE="default"
   fi
   # apply the kustomization file but commenting any non-deployment or service file
-  kubectl apply -k ./manifests --namespace="$ARGO_STAGING_NAMESPACE"
+  kubectl apply -k ./manifests --namespace="$CI_STAGING_NAMESPACE"
 fi
 
 # if K8S_DEPLOY_TIMEOUT is not set, set it else use exist
-if [ -z "$ARGO_K8S_DEPLOY_TIMEOUT" ]; then
+if [ -z "$CI_K8S_DEPLOY_TIMEOUT" ]; then
   echo "INFO: **************************************************************************************"
   echo "INFO: No Kubernetes deploy timeout specified. Defaulting to 30 minutes."
-  echo "INFO: Documentation: https://gitlab.com/itentialopensource/argo#kubernetes-deployment-optional"
   echo "INFO: **************************************************************************************"
-  ARGO_K8S_DEPLOY_TIMEOUT=1800
+  CI_K8S_DEPLOY_TIMEOUT=1800
 fi
 
 #--------------------------#
@@ -131,7 +129,7 @@ fi
 #--------------------------#
 
 # set timeout
-TIMEOUT=$(( "$SECONDS"+"$ARGO_K8S_DEPLOY_TIMEOUT" ))
+TIMEOUT=$(( "$SECONDS"+"$CI_K8S_DEPLOY_TIMEOUT" ))
 
 # if the LoadBalancer doesn't exist for this app (i.e.NodePort) skip the IP look up
 if [ "$(kubectl get service "${APPLICATION_NAME}" -o json | jq .status.loadBalancer)" != {} ]; then

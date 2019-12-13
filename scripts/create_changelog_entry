@@ -19,16 +19,16 @@ create_release_note() {
   #----------------#
 
   if [[ "$TICKET_NUM" =~ ^[A-Z]{2,4}-[0-9]{1,6}$ ]]; then
-    TICKET_LINK="[${TICKET_NUM}]($ARGO_JIRA_URL/browse/${TICKET_NUM})"
+    TICKET_LINK="[${TICKET_NUM}]($CI_JIRA_URL/browse/${TICKET_NUM})"
     # curl jira api for release note via the release note field
     CHANGELOG_CONTENT="$(
       curl -sS \
-      -H "Authorization: Basic $ARGO_JIRA_AUTH_KEY" \
+      -H "Authorization: Basic $CI_JIRA_AUTH_KEY" \
       -H "Content-Type: application/json" \
-      -L "$ARGO_JIRA_URL"/rest/api/3/issue/"${TICKET_NUM}"?fields="$ARGO_JIRA_RELEASE_NOTE_FIELD" \
+      -L "$CI_JIRA_URL"/rest/api/3/issue/"${TICKET_NUM}"?fields="$CI_JIRA_RELEASE_NOTE_FIELD" \
       | awk -F"\"text\":\"" '{ print $2 }' | awk -F"\"}]" '{ print $1 }')"
     # if the release note string is empty or no field exists, swap for generic note
-    if [[ -z "${CHANGELOG_CONTENT// }" || -z "$ARGO_JIRA_RELEASE_NOTE_FIELD" || "$CHANGELOG_CONTENT" == *"Unauthorized (401)"* ]]; then
+    if [[ -z "${CHANGELOG_CONTENT// }" || -z "$CI_JIRA_RELEASE_NOTE_FIELD" || "$CHANGELOG_CONTENT" == *"Unauthorized (401)"* ]]; then
       echo -e "\033[1;33mWARNING: ***********************************************************************************"
       echo "WARNING: Unable to fetch release notes from jira ticket \"$TICKET_NUM\"."
       echo "WARNING: This version's changelog will contain a generic entry."

@@ -13,15 +13,15 @@ elif [ -n "$TRAVIS_BRANCH" ]; then
   CURRENT_BRANCH="$TRAVIS_BRANCH"
 fi
 
-if [ -n "$ARGO_GCLOUD_PROJECT_NAME" ]; then
+if [ -n "$CI_GCLOUD_PROJECT_NAME" ]; then
   # write the auth file to current context as json
-  echo "${ARGO_GCLOUD_PROJECT_KEY_FILE}" > ./"${ARGO_GCLOUD_PROJECT_NAME}".json
+  echo "${CI_GCLOUD_PROJECT_KEY_FILE}" > ./"${CI_GCLOUD_PROJECT_NAME}".json
   # authenticate using the keyfile created in the current context
-  gcloud auth activate-service-account --key-file=./"${ARGO_GCLOUD_PROJECT_NAME}".json
+  gcloud auth activate-service-account --key-file=./"${CI_GCLOUD_PROJECT_NAME}".json
 
   # authenticate kubectl with STAGING credentials
   echo "Authenticating gcloud with STAGING cluster"
-  gcloud container clusters get-credentials "$ARGO_GCLOUD_STAGING_CLUSTER_NAME" --zone "$ARGO_GCLOUD_STAGING_CLUSTER_ZONE" --project "$ARGO_GCLOUD_PROJECT_NAME"
+  gcloud container clusters get-credentials "$CI_GCLOUD_STAGING_CLUSTER_NAME" --zone "$CI_GCLOUD_STAGING_CLUSTER_ZONE" --project "$CI_GCLOUD_PROJECT_NAME"
 
   # if current branch is master
   if [ "$CURRENT_BRANCH" = "master" ]; then
@@ -32,13 +32,12 @@ if [ -n "$ARGO_GCLOUD_PROJECT_NAME" ]; then
     kubectl delete -k ./manifests || true
     # authenticate kubectl with PROD credentials
     echo "RE-authenticating gcloud with PRODUCTION cluster"
-    gcloud container clusters get-credentials "$ARGO_GCLOUD_PROD_CLUSTER_NAME" --zone "$ARGO_GCLOUD_PROD_CLUSTER_ZONE" --project "$ARGO_GCLOUD_PROJECT_NAME"
+    gcloud container clusters get-credentials "$CI_GCLOUD_PROD_CLUSTER_NAME" --zone "$CI_GCLOUD_PROD_CLUSTER_ZONE" --project "$CI_GCLOUD_PROJECT_NAME"
   fi
 else
   # if no crednetials have been set, notify user of the inability to deploy
   echo -e "\033[0;31mERROR: ***********************************************************************************"
-  echo "ERROR: ARGO_GCLOUD_PROJECT_NAME has not been configured. Unable to deploy this project to kubernetes."
-  echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#kubernetes-deployment-optional"
+  echo "ERROR: CI_GCLOUD_PROJECT_NAME has not been configured. Unable to deploy this project to kubernetes."
   echo -e "ERROR: ***********************************************************************************\033[0m"
   exit 1
 fi

@@ -1,8 +1,0 @@
-#!/bin/bash
-
-# Log in to a private docker registry
-if [ -n "$ARGO_DOCKER_REGISTRY_USERNAME" ]; then
-  echo "Setting up docker credentials..."
-  docker login -u "$ARGO_DOCKER_REGISTRY_USERNAME" -p "$ARGO_DOCKER_REGISTRY_PASSWORD" "$ARGO_DOCKER_REGISTRY_URL"
-  echo "Docker credentials configured."
-fi

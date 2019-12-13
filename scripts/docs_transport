@@ -12,17 +12,17 @@ cd ..|| exit 1
 # get the current directory
 CURRENT_DIR="${PWD}"
 
-# clone ARGO_DOCS_PROJECT_PATH: group/project-name
+# clone CI_DOCS_PROJECT_PATH: group/project-name
 if [ -n "$BITBUCKET_BRANCH" ]; then
-  git clone git@bitbucket.org:"$BITBUCKET_REPO_OWNER"/"$ARGO_DOCS_PROJECT_PATH".git
+  git clone git@bitbucket.org:"$BITBUCKET_REPO_OWNER"/"$CI_DOCS_PROJECT_PATH".git
   CI_PROJECT="$BITBUCKET_REPO_SLUG"
 elif [ -n "$CI_COMMIT_REF_NAME" ]; then
-  git clone git@gitlab.com:"$ARGO_DOCS_PROJECT_PATH".git
+  git clone git@gitlab.com:"$CI_DOCS_PROJECT_PATH".git
   CI_PROJECT="$CI_PROJECT_NAME"
 fi
 
 # move into the docs project directory
-cd "$ARGO_DOCS_PROJECT_NAME" || exit 1
+cd "$CI_DOCS_PROJECT_NAME" || exit 1
 
 # remove the previous project, if it exists. if it doesn't exist, create it
 rm -rf "$CI_PROJECT"
@@ -35,7 +35,7 @@ cd "$CI_PROJECT" || exit 1
 cp "${CURRENT_DIR}"/"${CI_PROJECT}"/docs/* .
 
 # return to docs dir for git commit
-cd "${CURRENT_DIR}"/"${ARGO_DOCS_PROJECT_NAME}" || exit 1
+cd "${CURRENT_DIR}"/"${CI_DOCS_PROJECT_NAME}" || exit 1
 
 # git add and git commit these changes with [skip-ci]
 git add .

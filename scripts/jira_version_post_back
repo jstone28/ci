@@ -4,57 +4,53 @@ ISSUE_NUM=$1
 NEW_VERSION=$2
 
 jira_version_post_back() {
-  if [ -n "$ARGO_JIRA_URL" ]; then
+  if [ -n "$CI_JIRA_URL" ]; then
     if [[ "$ISSUE_NUM" =~ [A-Z]{2,4}-[0-9]{1,6} ]]; then
       # post to a custom jira field named "Release Version"
-      if [ -n "$ARGO_JIRA_RELEASE_VERSION_FIELD" ]; then
+      if [ -n "$CI_JIRA_RELEASE_VERSION_FIELD" ]; then
         if curl -sS \
-          -H "Authorization: Basic $ARGO_JIRA_AUTH_KEY" \
+          -H "Authorization: Basic $CI_JIRA_AUTH_KEY" \
           -H "Content-Type: application/json" \
           -D- \
           -X PUT \
-          --data "{\"fields\": {\"$ARGO_JIRA_RELEASE_VERSION_FIELD\" : \"$CI_PROJECT_NAME:$NEW_VERSION\"}}" \
-          -L "$ARGO_JIRA_URL"/rest/api/2/issue/"$ISSUE_NUM" \
+          --data "{\"fields\": {\"$CI_JIRA_RELEASE_VERSION_FIELD\" : \"$CI_PROJECT_NAME:$NEW_VERSION\"}}" \
+          -L "$CI_JIRA_URL"/rest/api/2/issue/"$ISSUE_NUM" \
           --post301 > /dev/null; then
           echo "Successfully updated related ticket's release version field with $NEW_VERSION."
         else
           echo -e "\033[1;33mWARNING: ***********************************************************************************"
           echo "WARNING: Unable to update the related ticket's releases version. Make sure the"
-          echo "WARNING: ARGO_JIRA_RELEASE_VERSION_FIELD, ARGO_JIRA_URL, and ARGO_JIRA_AUTH_KEY are set and"
+          echo "WARNING: CI_JIRA_RELEASE_VERSION_FIELD, CI_JIRA_URL, and CI_JIRA_AUTH_KEY are set and"
           echo "WARNING: contain the correct values, then try again."
-          echo "WARNING: Documentation: https://gitlab.com/itentialopensource/argo#jira-integration-optional"
           echo -e "WARNING: ***********************************************************************************\033[0m"
         fi
       fi
-      if [ -n "$ARGO_NPM_MODULE_REGISTRY_PATH" ]; then
+      if [ -n "$CI_NPM_MODULE_REGISTRY_PATH" ]; then
         # comment registry URL in JIRA
         if curl -sS -o /dev/null \
-          -H "Authorization: Basic $ARGO_JIRA_AUTH_KEY" \
+          -H "Authorization: Basic $CI_JIRA_AUTH_KEY" \
           -H "Content-Type: application/json" \
           -X POST \
-          --data "{\"body\": \"$ARGO_NPM_MODULE_REGISTRY_PATH/$CI_PROJECT_NAME/\"}" \
-          -L "$ARGO_JIRA_URL"/rest/api/2/issue/"$ISSUE_NUM"/comment \
+          --data "{\"body\": \"$CI_NPM_MODULE_REGISTRY_PATH/$CI_PROJECT_NAME/\"}" \
+          -L "$CI_JIRA_URL"/rest/api/2/issue/"$ISSUE_NUM"/comment \
           --post301; then
-          echo "Successfully posted a link to the new version back to $ARGO_JIRA_URL/browse/$ISSUE_NUM."
+          echo "Successfully posted a link to the new version back to $CI_JIRA_URL/browse/$ISSUE_NUM."
         else
           echo -e "\033[1;33mWARNING: ***********************************************************************************"
-          echo "WARNING: Unable to post a link. Make sure the ARGO_JIRA_URL & ARGO_JIRA_AUTH_KEY are set"
+          echo "WARNING: Unable to post a link. Make sure the CI_JIRA_URL & CI_JIRA_AUTH_KEY are set"
           echo "WARNING: and contain the correct values, then try again."
-          echo "WARNING: Documentation: https://gitlab.com/itentialopensource/argo#jira-integration-optional"
           echo -e "WARNING: ***********************************************************************************\033[0m"
         fi
       else
         echo "INFO: **************************************************************************************"
-        echo "INFO: No Registry path provided. Argo will not post a link to the new version in Jira."
-        echo "INFO: Documentation: https://gitlab.com/itentialopensource/argo#jira-integration-optional"
+        echo "INFO: No Registry path provided. CI will not post a link to the new version in Jira."
         echo "INFO: **************************************************************************************"
       fi
     else
       echo "INFO: **************************************************************************************"
       echo "INFO: Invalid Jira issue number: $ISSUE_NUM"
-      echo "INFO: Argo will not post a link to the new version in Jira, since no issue number was"
+      echo "INFO: CI will not post a link to the new version in Jira, since no issue number was"
       echo "INFO: included in the branch name."
-      echo "INFO: Documentation: https://gitlab.com/itentialopensource/argo#jira-integration-optional"
       echo "INFO: **************************************************************************************"
     fi
   fi

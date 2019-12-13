@@ -4,33 +4,31 @@
 echo "Setting up git credentials..."
 mkdir -p ~/.ssh
 echo -e "Host gitlab.com\\n\\tStrictHostKeyChecking no\\n\\tLogLevel ERROR\\n" >> ~/.ssh/config
-if [ -n "$ARGO_GIT_EMAIL" ] && [ -n "$ARGO_GIT_USERNAME" ]; then
-  git config --global user.email "$ARGO_GIT_EMAIL"
-  git config --global user.name "$ARGO_GIT_USERNAME"
+if [ -n "$CI_GIT_EMAIL" ] && [ -n "$CI_GIT_USERNAME" ]; then
+  git config --global user.email "$CI_GIT_EMAIL"
+  git config --global user.name "$CI_GIT_USERNAME"
 else
   echo -e "\033[0;31mERROR: ***********************************************************************************"
-  echo "ERROR: Argo cannot find your git email & username. Make sure your environment variables"
+  echo "ERROR: CI cannot find your git email & username. Make sure your environment variables"
   echo "ERROR: have been set."
-  echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#git-credentials-required"
   echo -e "ERROR: ***********************************************************************************\033[0m"
   exit 1
 fi
-if [ -n "$ARGO_ID_RSA" ]; then
-  echo -e "$ARGO_ID_RSA" > ~/.ssh/id_rsa
+if [ -n "$CI_ID_RSA" ]; then
+  echo -e "$CI_ID_RSA" > ~/.ssh/id_rsa
   chmod 0400 ~/.ssh/id_rsa
 else
   echo -e "\033[0;31mERROR: ***********************************************************************************"
-  echo "ERROR: Argo cannot find your ssh id_rsa. Make sure your environment variables have been set."
-  echo "ERROR: Documentation: https://gitlab.com/itentialopensource/argo#git-credentials-required"
+  echo "ERROR: CI cannot find your ssh id_rsa. Make sure your environment variables have been set."
   echo -e "ERROR: ***********************************************************************************\033[0m"
   exit 1
 fi
 
 # self hosted SCM override
-if [ -n "$ARGO_SCM_HOST_NAME" ] && [ -n "$BITBUCKET_BRANCH" ]; then
-  git remote set-url origin "$ARGO_SCM_HOST_NAME":"$BITBUCKET_REPO_OWNER"/"$BITBUCKET_REPO_SLUG"
-elif [ -n "$ARGO_SCM_HOST_NAME" ] && [ -n "$CI_COMMIT_REF_NAME" ]; then
-  git remote set-url origin "$ARGO_SCM_HOST_NAME":"$CI_PROJECT_PATH"
+if [ -n "$CI_SCM_HOST_NAME" ] && [ -n "$BITBUCKET_BRANCH" ]; then
+  git remote set-url origin "$CI_SCM_HOST_NAME":"$BITBUCKET_REPO_OWNER"/"$BITBUCKET_REPO_SLUG"
+elif [ -n "$CI_SCM_HOST_NAME" ] && [ -n "$CI_COMMIT_REF_NAME" ]; then
+  git remote set-url origin "$CI_SCM_HOST_NAME":"$CI_PROJECT_PATH"
 else
 # if scm host is not overridden use the hosted versions
   if [ -n "$BITBUCKET_BRANCH" ]; then

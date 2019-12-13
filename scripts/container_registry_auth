@@ -1,0 +1,8 @@
+#!/bin/bash
+
+# Log in to a private docker registry
+if [ -n "$CI_CONTAINER_REGISTRY_USERNAME" ]; then
+  echo "Container registry authentication..."
+  docker login -u "$CI_CONTAINER_REGISTRY_USERNAME" -p "$CI_CONTAINER_REGISTRY_PASSWORD" "$CI_CONTAINER_REGISTRY_URL"
+  echo "Container registry authentication configured."
+fi
