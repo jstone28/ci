@@ -1,4 +1,4 @@
-#!/bin/bash
+ #!/bin/bash
 set -e
 
 #----------------------#
@@ -53,31 +53,13 @@ echo "Semver bump: $SEMVER"
 # Get Current Version #
 #---------------------#
 
-if [ -e "package.json" ]; then
-  echo "This project is a node module."
-  CURRENT_VERSION=$(node -p "require('./package.json').version")
-elif [ -e "pom.xml" ]; then
-  echo "This project is a maven project."
-  CURRENT_VERSION="$(mvn org.apache.maven.plugins:maven-help-plugin:2.1.1:evaluate -Dexpression=project.version|grep -Ev '(^\[|Download\w+:)'|tr -d ' ' | tail -1)"
-  VERSION_FILE="pom.xml"
-elif [ -e "package-meta-data.xml" ]; then
-  echo "This project is an ncs package."
-  CURRENT_VERSION="$(grep "package-version" package-meta-data.xml|cut -d \> -f 2|cut -d \< -f 1|tr -d ' ')"
-  VERSION_FILE="package-meta-data.xml"
-elif [ -e "pyproject.toml" ]; then
-  echo "This project is a python package."
-  CURRENT_VERSION="$(grep "version" pyproject.toml|awk -F '"' '{print $2}')"
-  VERSION_FILE="pyproject.toml"
-elif [ -e "VERSION" ]; then
+if [ -e "VERSION" ]; then
   echo "This project has a VERSION file to track its version."
   CURRENT_VERSION="$(cat VERSION)"
   VERSION_FILE="VERSION"
 else
-  echo -e "\033[0;31mERROR: ***********************************************************************************"
-  echo "ERROR: No project versioning system detected. Unable to create and manage versions"
-  echo "ERROR: for this project."
-  echo -e "ERROR: ***********************************************************************************\033[0m"
-  exit 1
+  echo "Creating VERSION file for version tracking"
+  touch VERSION
 fi
 echo "Last version: $CURRENT_VERSION"
 CURRENT_MAJOR=$(echo "$CURRENT_VERSION"|awk -F'.' '{print $1}')
