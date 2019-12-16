@@ -1,5 +1,7 @@
 FROM golang:1.13.5-alpine
 
+USER root
+
 # Configure Go
 ENV GOPATH=/go \
     PATH=/go/bin:$PATH \
@@ -8,7 +10,7 @@ ENV GOPATH=/go \
     GOARCH=amd64 \
     GO111MODULE=on
 
-WORKDIR $GOPATH
+WORKDIR ${GOPATH}
 
 # copy scripts to be globally available
 COPY ./scripts/ /usr/bin/

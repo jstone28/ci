@@ -43,7 +43,4 @@ DEPLOY
 Environment Variables: CI_CONTAINER_REGISTRY_USERNAME, CI_CONTAINER_REGISTRY_PASSWORD, CI_CONTAINER_REGISTRY_URL
 
 git_setup
-
-`ci_ping` - Simple hello world ping.
-
-Environment Variables: None.
+****
