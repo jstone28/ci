@@ -1,10 +1,10 @@
 build:
-	docker build -t jstone28/ci:2.0.0 .
+	docker build -t registry.gitlab.com/jstone28/ci .
 
 push:
-	docker push jstone28/ci:2.0.0
+	docker push registry.gitlab.com/jstone28/ci
 
 run:
-	docker run -it -u root --privileged -v /var/run/docker.sock:/var/run/docker.sock jstone28/ci:2.0.0 bash
+	docker run -it -u root --privileged -v /var/run/docker.sock:/var/run/docker.sock registry.gitlab.com/jstone28/ci bash
 
 all: build push

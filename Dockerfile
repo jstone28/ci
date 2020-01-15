@@ -7,17 +7,24 @@ ENV GOPATH=/go \
     GOOS=linux \
     GOARCH=amd64 \
     GO111MODULE=on \
+	GOLANG_VERSION=1.13.5 \
     PATH=$GOPATH/bin:/usr/local/go/bin:$PATH
 
 WORKDIR $GOPATH
 
-RUN apk add --no-cache ca-certificates jq git bash make
+#########################
+# pipeline dependencies #
+#########################
+RUN apk add --no-cache ca-certificates jq git bash make curl
 
-ENV GOLANG_VERSION 1.13.5
 
+##############
+# Add Golang #
+##############
 RUN set -eux; \
 	apk add --no-cache --virtual .build-deps \
 		bash \
+		jq \
 		gcc \
 		musl-dev \
 		openssl \
@@ -62,6 +69,12 @@ RUN set -eux; \
 	go version
 
 RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 777 "$GOPATH"
+
+######################
+# Add docker-compose #
+######################
+RUN apk add --no-cache py-pip python-dev libffi-dev openssl-dev gcc libc-dev
+RUN pip install docker-compose
 
 # copy scripts to be globally available
 COPY ./scripts/ /usr/bin/
