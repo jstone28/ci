@@ -15,7 +15,6 @@ stages:
 deploy:
   stage: deploy
   script:
-     - echo "docker_setup"
-    # - docker_setup
-    # - docker build -t jstone28/ci:latest .
-    # - docker push jstone28/ci:latest
+    - container_registry_auth
+    - docker build -t jstone28/ci:latest .
+    - docker push jstone28/ci:latest
